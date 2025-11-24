@@ -50,52 +50,73 @@ export function PageView({ loadingMap, ensureProcessed }: PageViewProps) {
   const cards = useLiveQuery(() => db.cards.orderBy("order").toArray(), []);
   const images = useLiveQuery(() => db.images.toArray(), []);
 
-  const urlCacheRef = useRef<Map<string, { blob: Blob; url: string }>>(new Map());
+  const urlCacheRef = useRef<Map<string, { blob: Blob | null; url: string; isProcessed: boolean }>>(new Map());
 
-  const processedImageUrls: Record<string, string> = useMemo(() => {
+  // Returns image URLs - prefers displayBlob (processed), falls back to originalBlob or sourceUrl
+  const { imageUrls, processedIds } = useMemo(() => {
     const urls: Record<string, string> = {};
-    if (!images) return urls;
+    const processed = new Set<string>();
+    if (!images) return { imageUrls: urls, processedIds: processed };
 
     const currentCache = urlCacheRef.current;
     const usedIds = new Set<string>();
 
     images.forEach((img) => {
-      if (img.displayBlob && img.displayBlob.size > 0) {
-        usedIds.add(img.id);
+      usedIds.add(img.id);
 
-        // Check if we already have a URL for this exact blob
-        const cached = currentCache.get(img.id);
-        if (cached && cached.blob === img.displayBlob) {
+      // Determine the best available source
+      const hasProcessed = img.displayBlob && img.displayBlob.size > 0;
+      const blob = hasProcessed ? img.displayBlob : img.originalBlob;
+      const sourceUrl = img.sourceUrl;
+
+      if (hasProcessed) {
+        processed.add(img.id);
+      }
+
+      // Check cache
+      const cached = currentCache.get(img.id);
+
+      if (blob) {
+        // We have a blob (processed or original)
+        if (cached && cached.blob === blob) {
           urls[img.id] = cached.url;
         } else {
           // Revoke old URL if it exists
-          if (cached) {
+          if (cached && cached.url && !cached.url.startsWith('http')) {
             URL.revokeObjectURL(cached.url);
           }
           // Create new URL
-          const newUrl = URL.createObjectURL(img.displayBlob);
+          const newUrl = URL.createObjectURL(blob);
           urls[img.id] = newUrl;
-          currentCache.set(img.id, { blob: img.displayBlob, url: newUrl });
+          currentCache.set(img.id, { blob, url: newUrl, isProcessed: hasProcessed });
         }
+      } else if (sourceUrl) {
+        // No blob yet, use sourceUrl directly (will be proxied)
+        urls[img.id] = sourceUrl;
+        currentCache.set(img.id, { blob: null, url: sourceUrl, isProcessed: false });
       }
     });
 
-    // Clean up URLs for images that no longer exist or don't have blobs
+    // Clean up URLs for images that no longer exist
     for (const [id, cached] of currentCache.entries()) {
       if (!usedIds.has(id)) {
-        URL.revokeObjectURL(cached.url);
+        if (cached.url && !cached.url.startsWith('http')) {
+          URL.revokeObjectURL(cached.url);
+        }
         currentCache.delete(id);
       }
     }
 
-    return urls;
+    return { imageUrls: urls, processedIds: processed };
   }, [images]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       for (const cached of urlCacheRef.current.values()) {
-        URL.revokeObjectURL(cached.url);
+        if (cached.url && !cached.url.startsWith('http')) {
+          URL.revokeObjectURL(cached.url);
+        }
       }
       urlCacheRef.current.clear();
     };
@@ -146,11 +167,6 @@ export function PageView({ loadingMap, ensureProcessed }: PageViewProps) {
     return chunks;
   }
 
-  useEffect(() => {
-    return () => {
-      Object.values(processedImageUrls).forEach(URL.revokeObjectURL);
-    };
-  }, [processedImageUrls]);
 
   return (
     <div className="w-1/2 flex-1 overflow-y-auto bg-gray-200 h-full p-6 flex justify-center dark:bg-gray-800 ">
@@ -317,14 +333,16 @@ export function PageView({ loadingMap, ensureProcessed }: PageViewProps) {
                       );
                     }
 
-                    const processedBlobUrl = processedImageUrls[card.imageId];
+                    const imageSrc = imageUrls[card.imageId];
+                    const isProcessed = processedIds.has(card.imageId);
 
                     return (
                       <CardCellLazy
                         key={globalIndex}
                         card={card}
                         state={loadingMap[card.uuid] ?? "idle"}
-                        hasImage={!!processedBlobUrl}
+                        hasImage={!!imageSrc}
+                        isProcessed={isProcessed}
                         ensureProcessed={ensureProcessed}
                       >
                         <SortableCard
@@ -332,7 +350,7 @@ export function PageView({ loadingMap, ensureProcessed }: PageViewProps) {
                           card={card}
                           index={index}
                           globalIndex={globalIndex}
-                          imageSrc={processedBlobUrl!}
+                          imageSrc={imageSrc!}
                           totalCardWidth={totalCardWidth}
                           totalCardHeight={totalCardHeight}
                           guideOffset={guideOffset}

@@ -56,7 +56,7 @@ const defaultPageSettings = {
   cardPositionX: 0,
   cardPositionY: 0,
   zoom: 1,
-  dpi: 900,
+  dpi: 300,
   globalLanguage: "en",
 } as Store;
 
