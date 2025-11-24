@@ -29,12 +29,16 @@ export function ArtworkModal() {
   const modalCard = useArtworkModalStore((state) => state.card);
   const closeModal = useArtworkModalStore((state) => state.closeModal);
 
-  // Reset local state when the modal is closed or the underlying card changes
+  const [isFetchingArtworks, setIsFetchingArtworks] = useState(false);
+  const [fetchedArtworks, setFetchedArtworks] = useState<string[] | null>(null);
+
+  // Reset local state when the modal is closed
   useEffect(() => {
     if (!isModalOpen) {
       setPreviewCardData(null);
       setSearchQuery("");
       setApplyToAll(false);
+      setFetchedArtworks(null);
     }
   }, [isModalOpen]);
 
@@ -44,9 +48,44 @@ export function ArtworkModal() {
       [modalCard?.imageId]
     ) || null;
 
+  // Automatically fetch all unique artworks when modal opens
+  useEffect(() => {
+    if (!isModalOpen || !modalCard?.name || previewCardData) return;
+
+    // Don't refetch if we already have multiple artworks cached
+    if (imageObject?.imageUrls && imageObject.imageUrls.length > 1) {
+      return;
+    }
+
+    const fetchArtworks = async () => {
+      setIsFetchingArtworks(true);
+      try {
+        const res = await axios.post<ScryfallCard[]>(
+          `${API_BASE}/api/cards/images`,
+          { cardNames: [modalCard.name], cardArt: "art" }
+        );
+        const urls = res.data?.[0]?.imageUrls ?? [];
+        if (urls.length > 0) {
+          setFetchedArtworks(urls);
+          // Also update the database so it's cached for next time
+          if (imageObject?.id) {
+            await db.images.update(imageObject.id, { imageUrls: urls });
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch artworks:", err);
+      } finally {
+        setIsFetchingArtworks(false);
+      }
+    };
+
+    fetchArtworks();
+  }, [isModalOpen, modalCard?.name, imageObject?.id, imageObject?.imageUrls?.length, previewCardData]);
+
   const displayData = {
     name: previewCardData?.name || modalCard?.name,
-    imageUrls: previewCardData?.imageUrls || imageObject?.imageUrls,
+    // Use fetched artworks if available, otherwise fall back to stored imageUrls
+    imageUrls: previewCardData?.imageUrls || fetchedArtworks || imageObject?.imageUrls,
     id: previewCardData?.imageUrls?.[0] || imageObject?.id,
   };
 
@@ -151,29 +190,36 @@ export function ArtworkModal() {
 
         {modalCard && (
           <>
-            <div className="grid grid-cols-3 md:grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto pt-4">
-              {(displayData.imageUrls ?? []).map((pngUrl, i) => (
-                <img
-                  key={i}
-                  src={pngUrl}
-                  loading="lazy"
-                  className={`w-full cursor-pointer border-4 ${
-                    displayData.id === pngUrl
-                      ? "border-green-500"
-                      : "border-transparent"
-                  }`}
-                  onClick={() => handleSelectArtwork(pngUrl)}
-                />
-              ))}
-            </div>
+            {isFetchingArtworks ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <div className="h-10 w-10 animate-spin rounded-full border-4 border-blue-500 border-t-transparent mb-4" />
+                <p className="text-gray-600 dark:text-gray-300">Loading artworks...</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 md:grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto pt-4">
+                {(displayData.imageUrls ?? []).map((pngUrl, i) => (
+                  <img
+                    key={i}
+                    src={pngUrl}
+                    loading="lazy"
+                    className={`w-full cursor-pointer border-4 rounded ${
+                      displayData.id === pngUrl
+                        ? "border-green-500"
+                        : "border-transparent hover:border-gray-300"
+                    }`}
+                    onClick={() => handleSelectArtwork(pngUrl)}
+                  />
+                ))}
+              </div>
+            )}
 
             <Button
               className="w-full mt-4"
-              color="blue"
+              color="gray"
               onClick={getMorePrints}
-              disabled={isGettingMore}
+              disabled={isGettingMore || isFetchingArtworks}
             >
-              {isGettingMore ? "Loading prints..." : "Get All Prints"}
+              {isGettingMore ? "Loading all prints..." : "Show All Prints (every set)"}
             </Button>
           </>
         )}
