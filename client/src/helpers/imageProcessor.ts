@@ -43,7 +43,8 @@ export class ImageProcessor {
   private maxWorkers: number;
 
   constructor() {
-    this.maxWorkers = Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
+    // Use full core count for maximum parallelism
+    this.maxWorkers = navigator.hardwareConcurrency || 4;
   }
 
   private createWorker(): Worker {
@@ -78,27 +79,30 @@ export class ImageProcessor {
     }, 20000); // Terminate after 20 seconds of inactivity
 
     this.idleWorkers.push({ worker, timeoutId });
-    this.processNextTask();
+    this.dispatchPendingTasks();
   }
 
-  private processNextTask() {
-    if (this.taskQueue.length === 0) {
-      return;
-    }
+  /**
+   * Dispatch pending tasks to ALL available workers, not just one.
+   * This enables true parallel image processing.
+   */
+  private dispatchPendingTasks() {
+    while (this.taskQueue.length > 0) {
+      let worker: Worker | null = null;
 
-    let worker: Worker | null = null;
-
-    if (this.idleWorkers.length > 0) {
-      const idleWorker = this.idleWorkers.pop()!;
-      if (idleWorker.timeoutId) {
-        clearTimeout(idleWorker.timeoutId);
+      if (this.idleWorkers.length > 0) {
+        const idleWorker = this.idleWorkers.pop()!;
+        if (idleWorker.timeoutId) {
+          clearTimeout(idleWorker.timeoutId);
+        }
+        worker = idleWorker.worker;
+      } else if (this.allWorkers.size < this.maxWorkers) {
+        worker = this.createWorker();
+      } else {
+        // No workers available, wait for one to finish
+        break;
       }
-      worker = idleWorker.worker;
-    } else if (this.allWorkers.size < this.maxWorkers) {
-      worker = this.createWorker();
-    }
 
-    if (worker) {
       const task = this.taskQueue.shift()!;
 
       worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
@@ -109,7 +113,7 @@ export class ImageProcessor {
       worker.onerror = (e: ErrorEvent) => {
         this.terminateWorker(worker);
         task.reject(e);
-        this.processNextTask(); // Try to process another task with a new worker if available
+        this.dispatchPendingTasks(); // Try to process remaining tasks
       };
 
       worker.postMessage(task.message);
@@ -119,7 +123,7 @@ export class ImageProcessor {
   process(message: WorkerMessage): Promise<WorkerResponse> {
     return new Promise((resolve, reject) => {
       this.taskQueue.push({ message, resolve, reject });
-      this.processNextTask();
+      this.dispatchPendingTasks();
     });
   }
 

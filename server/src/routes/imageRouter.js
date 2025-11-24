@@ -11,6 +11,10 @@ const {
   getScryfallPngImagesForCardPrints,
 } = require("../utils/getCardImagesPaged");
 
+const {
+  fetchCardsWithFallback,
+} = require("../utils/scryfallCollection");
+
 // --- add under your existing requires ---
 const AX = axios.create({
   timeout: 12000,                                  // 12s per outbound request
@@ -239,6 +243,59 @@ imageRouter.post("/", async (req, res) => {
     return res.status(500).json({ error: "Failed to fetch images from Scryfall." });
   } finally {
     console.log(`[POST /images] ${infos.length} cards in ${Date.now() - started}ms`);
+  }
+});
+
+// -------------------- Collection API (fast batch fetch) --------------------
+
+imageRouter.post("/collection", async (req, res) => {
+  const cardQueries = Array.isArray(req.body.cardQueries) ? req.body.cardQueries : [];
+
+  if (!cardQueries.length) {
+    return res.status(400).json({ error: "Provide cardQueries array." });
+  }
+
+  const started = Date.now();
+
+  try {
+    const { found, notFound } = await fetchCardsWithFallback(cardQueries);
+
+    // Convert Map to array of results, preserving original query info
+    const results = cardQueries.map((query) => {
+      const key = `${(query.name || "").toLowerCase()}|${query.set || ""}|${query.number || ""}`;
+      const match = found.get(key);
+
+      if (match) {
+        return {
+          name: match.card.name,
+          set: match.card.set,
+          number: match.card.number,
+          imageUrl: match.card.imageUrl,
+          found: true,
+        };
+      } else {
+        return {
+          name: query.name,
+          set: query.set,
+          number: query.number,
+          imageUrl: null,
+          found: false,
+        };
+      }
+    });
+
+    const foundCount = results.filter((r) => r.found).length;
+    console.log(
+      `[POST /collection] ${foundCount}/${cardQueries.length} cards found in ${Date.now() - started}ms`
+    );
+
+    return res.json({
+      results,
+      notFound: notFound.map((q) => ({ name: q.name, set: q.set, number: q.number })),
+    });
+  } catch (err) {
+    console.error("[POST /collection] Error:", err?.message);
+    return res.status(500).json({ error: "Failed to fetch cards from Scryfall." });
   }
 });
 

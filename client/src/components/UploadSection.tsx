@@ -1,4 +1,3 @@
-import { fetchEventSource } from "@microsoft/fetch-event-source";
 import React, { useRef, useState } from "react";
 import { db } from "../db";
 import fullLogo from "@/assets/fullLogo.png";
@@ -15,7 +14,7 @@ import {
   tryParseMpcSchemaXml,
 } from "@/helpers/Mpc";
 import { useCardsStore, useLoadingStore, useSettingsStore } from "@/store";
-import type { CardOption, ScryfallCard } from "@/types/Card";
+import type { CardOption } from "@/types/Card";
 import axios from "axios";
 import { addCards, addCustomImage, addRemoteImage } from "@/helpers/dbUtils";
 import {
@@ -43,7 +42,6 @@ export function UploadSection() {
   const fetchController = useRef<AbortController | null>(null);
 
   const setLoadingTask = useLoadingStore((state) => state.setLoadingTask);
-  const setLoadingMessage = useLoadingStore((state) => state.setLoadingMessage);
 
   const globalLanguage = useSettingsStore((s) => s.globalLanguage ?? "en");
   const setGlobalLanguage = useSettingsStore(
@@ -154,7 +152,6 @@ export function UploadSection() {
       fetchController.current.abort();
     }
     fetchController.current = new AbortController();
-    const signal = fetchController.current.signal;
 
     try {
       const infos = parseDeckToInfos(deckText || "");
@@ -162,101 +159,94 @@ export function UploadSection() {
 
       setLoadingTask("Fetching cards");
 
+      // Deduplicate queries while preserving quantity info
       const uniqueMap = new Map<string, CardInfo>();
       for (const { info } of infos) uniqueMap.set(cardKey(info), info);
       const uniqueInfos = Array.from(uniqueMap.values());
 
-      const optionByKey: Record<string, ScryfallCard> = {};
+      // Use new Collection API endpoint
+      const response = await axios.post<{
+        results: Array<{
+          name: string;
+          set?: string;
+          number?: string;
+          imageUrl: string | null;
+          found: boolean;
+        }>;
+        notFound: Array<{ name: string; set?: string; number?: string }>;
+      }>(
+        `${API_BASE}/api/cards/images/collection`,
+        { cardQueries: uniqueInfos },
+        { signal: fetchController.current.signal }
+      );
 
-      await fetchEventSource(`${API_BASE}/api/stream/cards`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          cardQueries: uniqueInfos,
-          language: globalLanguage,
-        }),
-        signal,
-        onopen: async (res) => {
-          if (!res.ok) {
-            const errorText = await res.text();
-            throw new Error(
-              `Failed to fetch cards: ${res.status} ${res.statusText} - ${errorText}`
-            );
-          }
-        },
-        onmessage: async (ev) => {
-          if (ev.event === "progress") {
-            const progress = JSON.parse(ev.data);
-            setLoadingMessage(`(${progress.processed} / ${progress.total})`);
-          } else if (ev.event === "card-found") {
-            const card = JSON.parse(ev.data) as ScryfallCard;
-            if (!card?.name) return;
+      const { results, notFound } = response.data;
 
-            const k = cardKey({
-              name: card.name,
-              set: card.set,
-              number: card.number,
-            });
-            optionByKey[k] = card;
-            const nameOnlyKey = cardKey({ name: card.name });
-            if (!optionByKey[nameOnlyKey]) optionByKey[nameOnlyKey] = card;
-          } else if (ev.event === "done") {
-            const cardsToAdd: (Omit<CardOption, "uuid" | "order"> & {
-              imageId?: string;
-            })[] = [];
+      // Build lookup map from results
+      const resultByKey: Record<string, (typeof results)[0]> = {};
+      for (const result of results) {
+        const k = cardKey({
+          name: result.name,
+          set: result.set,
+          number: result.number,
+        });
+        resultByKey[k] = result;
+        // Also store by name-only for fallback matching
+        const nameOnlyKey = cardKey({ name: result.name });
+        if (!resultByKey[nameOnlyKey]) resultByKey[nameOnlyKey] = result;
+      }
 
-            for (const { info, quantity } of infos) {
-              const k = cardKey(info);
-              const fallbackK = cardKey({ name: info.name });
-              const card = optionByKey[k] ?? optionByKey[fallbackK];
-              const imageId = await addRemoteImage(card?.imageUrls ?? []);
+      // Build cards to add, respecting quantities from original decklist
+      const cardsToAdd: (Omit<CardOption, "uuid" | "order"> & {
+        imageId?: string;
+      })[] = [];
 
-              for (let i = 0; i < quantity; i++) {
-                cardsToAdd.push({
-                  name: card?.name || info.name,
-                  set: card?.set,
-                  number: card?.number,
-                  lang: card?.lang,
-                  isUserUpload: false,
-                  imageId: imageId,
-                });
-              }
-            }
+      for (const { info, quantity } of infos) {
+        const k = cardKey(info);
+        const fallbackK = cardKey({ name: info.name });
+        const result = resultByKey[k] ?? resultByKey[fallbackK];
 
-            if (cardsToAdd.length > 0) {
-              await addCards(cardsToAdd);
-            }
+        const imageUrl = result?.imageUrl;
+        const imageId = imageUrl ? await addRemoteImage([imageUrl]) : undefined;
 
-            setDeckText("");
-          }
-        },
-        onclose: () => {
-          setLoadingTask(null);
-          fetchController.current = null;
-        },
-        onerror: (err) => {
-          // The library handles retries, this is for fatal errors
-          setLoadingTask(null);
-          if (err.name !== "AbortError") {
-            console.error("[FetchCards] Streaming Error:", err);
-            alert("An error occurred while fetching cards. Please try again.");
-          }
-          fetchController.current = null;
-          throw err; // This will stop retries
-        },
-      });
+        for (let i = 0; i < quantity; i++) {
+          cardsToAdd.push({
+            name: result?.name || info.name,
+            set: result?.set,
+            number: result?.number,
+            isUserUpload: false,
+            imageId: imageId,
+          });
+        }
+      }
+
+      if (cardsToAdd.length > 0) {
+        await addCards(cardsToAdd);
+      }
+
+      // Warn user about cards that couldn't be found
+      if (notFound.length > 0) {
+        const notFoundNames = notFound.map((c) => c.name).join(", ");
+        console.warn("[FetchCards] Cards not found:", notFoundNames);
+        alert(
+          `Some cards could not be found: ${notFoundNames}\n\nThey were added without images.`
+        );
+      }
+
+      setDeckText("");
     } catch (err: unknown) {
       if (err instanceof Error) {
-        if (err.name !== "AbortError") {
-          setLoadingTask(null);
+        if (err.name !== "AbortError" && err.name !== "CanceledError") {
           console.error("[FetchCards] Error:", err);
           alert(err.message || "Something went wrong while fetching cards.");
         }
       } else {
-        setLoadingTask(null);
         console.error("[FetchCards] Unknown Error:", err);
         alert("An unknown error occurred while fetching cards.");
       }
+    } finally {
+      setLoadingTask(null);
+      fetchController.current = null;
     }
   };
 
