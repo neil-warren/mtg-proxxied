@@ -65,7 +65,7 @@ export function PageView({ loadingMap, ensureProcessed }: PageViewProps) {
       usedIds.add(img.id);
 
       // Determine the best available source
-      const hasProcessed = img.displayBlob && img.displayBlob.size > 0;
+      const hasProcessed = !!(img.displayBlob && img.displayBlob.size > 0);
       const blob = hasProcessed ? img.displayBlob : img.originalBlob;
       const sourceUrl = img.sourceUrl;
 

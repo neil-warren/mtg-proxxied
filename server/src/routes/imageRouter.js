@@ -195,6 +195,8 @@ imageRouter.post("/", async (req, res) => {
   const language = (req.body.language || "en").toLowerCase();
   const fallbackToEnglish =
     typeof req.body.fallbackToEnglish === "boolean" ? req.body.fallbackToEnglish : true;
+  const strictSet =
+    typeof req.body.strictSet === "boolean" ? req.body.strictSet : false;
 
   if (!cardQueries && !cardNames) {
     return res.status(400).json({ error: "Provide cardQueries (preferred) or cardNames." });
@@ -215,10 +217,10 @@ imageRouter.post("/", async (req, res) => {
     const results = await Promise.all(
       infos.map((ci) =>
         limit(async () => {
-          // 20s safety timeout per card so one slow POP can’t hang everything
+          // 20s safety timeout per card so one slow POP can't hang everything
           const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("scryfall-timeout")), 20000));
           const task = (async () => {
-            const imageUrls = await getImagesForCardInfo(ci, unique, ci.language, fallbackToEnglish);
+            const imageUrls = await getImagesForCardInfo(ci, unique, ci.language, fallbackToEnglish, strictSet);
             return {
               name: ci.name,
               set: ci.set,
@@ -230,7 +232,7 @@ imageRouter.post("/", async (req, res) => {
           try {
             return await Promise.race([task, timeout]);
           } catch {
-            // On timeout/error, return empty list (UI won’t spin forever)
+            // On timeout/error, return empty list (UI won't spin forever)
             return { name: ci.name, set: ci.set, number: ci.number, imageUrls: [], language: ci.language };
           }
         })

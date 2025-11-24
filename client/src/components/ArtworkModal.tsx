@@ -20,6 +20,8 @@ import { ArrowLeft } from "lucide-react";
 export function ArtworkModal() {
   const [isGettingMore, setIsGettingMore] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [setFilter, setSetFilter] = useState("");
+  const [isSearchingSet, setIsSearchingSet] = useState(false);
   const [applyToAll, setApplyToAll] = useState(false);
   const [previewCardData, setPreviewCardData] = useState<ScryfallCard | null>(
     null
@@ -31,14 +33,17 @@ export function ArtworkModal() {
 
   const [isFetchingArtworks, setIsFetchingArtworks] = useState(false);
   const [fetchedArtworks, setFetchedArtworks] = useState<string[] | null>(null);
+  const [setSearchResults, setSetSearchResults] = useState<string[] | null>(null);
 
   // Reset local state when the modal is closed
   useEffect(() => {
     if (!isModalOpen) {
       setPreviewCardData(null);
       setSearchQuery("");
+      setSetFilter("");
       setApplyToAll(false);
       setFetchedArtworks(null);
+      setSetSearchResults(null);
     }
   }, [isModalOpen]);
 
@@ -84,10 +89,67 @@ export function ArtworkModal() {
 
   const displayData = {
     name: previewCardData?.name || modalCard?.name,
-    // Use fetched artworks if available, otherwise fall back to stored imageUrls
-    imageUrls: previewCardData?.imageUrls || fetchedArtworks || imageObject?.imageUrls,
+    // Priority: set search results > preview card > fetched artworks > stored imageUrls
+    imageUrls: setSearchResults || previewCardData?.imageUrls || fetchedArtworks || imageObject?.imageUrls,
     id: previewCardData?.imageUrls?.[0] || imageObject?.id,
   };
+
+  // Search for specific set/collector number
+  async function handleSetSearch() {
+    const query = setFilter.trim().toLowerCase();
+    if (!query || !modalCard?.name) return;
+
+    setIsSearchingSet(true);
+    setSetSearchResults(null);
+
+    try {
+      // Parse input - could be "cmm", "cmm 123", or just "123"
+      let set: string | undefined;
+      let number: string | undefined;
+
+      const parts = query.split(/\s+/);
+      if (parts.length === 2) {
+        set = parts[0];
+        number = parts[1];
+      } else if (/^\d+[a-z]?$/i.test(query)) {
+        // Just a collector number
+        number = query;
+      } else {
+        // Just a set code
+        set = query;
+      }
+
+      const res = await axios.post<ScryfallCard[]>(
+        `${API_BASE}/api/cards/images`,
+        {
+          cardQueries: [{
+            name: modalCard.name,
+            set,
+            number,
+          }],
+          cardArt: "prints",
+          strictSet: true, // Don't fall back to all prints if set search fails
+        }
+      );
+
+      const urls = res.data?.[0]?.imageUrls ?? [];
+      if (urls.length > 0) {
+        setSetSearchResults(urls);
+      } else {
+        alert(`No results found for "${query}"`);
+      }
+    } catch (err) {
+      console.error("Set search failed:", err);
+      alert("Search failed. Please try again.");
+    } finally {
+      setIsSearchingSet(false);
+    }
+  }
+
+  function clearSetSearch() {
+    setSetFilter("");
+    setSetSearchResults(null);
+  }
 
   async function getMorePrints() {
     if (!displayData.name || !displayData.id) return;
@@ -156,12 +218,39 @@ export function ArtworkModal() {
         Select Artwork for {displayData.name}
       </ModalHeader>
       <ModalBody>
-        <div className="sticky top-0 z-10 bg-white dark:bg-gray-700 py-4">
-          <div className="flex gap-2 mb-4">
+        <div className="sticky top-0 z-10 bg-white dark:bg-gray-700 py-4 space-y-3">
+          {/* Set/Number filter for current card */}
+          <div className="flex gap-2">
             <TextInput
               className="flex-grow"
               type="text"
-              placeholder="Replace with a different card..."
+              placeholder="Filter by set or number (e.g., cmm, 368, or cmm 420)"
+              value={setFilter}
+              onChange={(e) => setSetFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleSetSearch();
+                }
+              }}
+            />
+            <Button onClick={handleSetSearch} disabled={isSearchingSet}>
+              {isSearchingSet ? "..." : "Filter"}
+            </Button>
+            {setSearchResults && (
+              <Button color="gray" onClick={clearSetSearch}>
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {/* Search for different card */}
+          <div className="flex gap-2">
+            <TextInput
+              className="flex-grow"
+              type="text"
+              placeholder="Or search for a different card..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -172,8 +261,9 @@ export function ArtworkModal() {
                 }
               }}
             />
-            <Button onClick={handleSearch}>Search</Button>
+            <Button color="gray" onClick={handleSearch}>Search</Button>
           </div>
+
           {modalCard && (
             <div className="flex items-center gap-2">
               <Checkbox
@@ -190,37 +280,48 @@ export function ArtworkModal() {
 
         {modalCard && (
           <>
-            {isFetchingArtworks ? (
+            {(isFetchingArtworks || isSearchingSet) ? (
               <div className="flex flex-col items-center justify-center py-12">
                 <div className="h-10 w-10 animate-spin rounded-full border-4 border-blue-500 border-t-transparent mb-4" />
-                <p className="text-gray-600 dark:text-gray-300">Loading artworks...</p>
+                <p className="text-gray-600 dark:text-gray-300">
+                  {isSearchingSet ? "Searching..." : "Loading artworks..."}
+                </p>
               </div>
             ) : (
-              <div className="grid grid-cols-3 md:grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto pt-4">
-                {(displayData.imageUrls ?? []).map((pngUrl, i) => (
-                  <img
-                    key={i}
-                    src={pngUrl}
-                    loading="lazy"
-                    className={`w-full cursor-pointer border-4 rounded ${
-                      displayData.id === pngUrl
-                        ? "border-green-500"
-                        : "border-transparent hover:border-gray-300"
-                    }`}
-                    onClick={() => handleSelectArtwork(pngUrl)}
-                  />
-                ))}
-              </div>
+              <>
+                {setSearchResults && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                    Showing {setSearchResults.length} result{setSearchResults.length !== 1 ? "s" : ""} for "{setFilter}"
+                  </p>
+                )}
+                <div className="grid grid-cols-3 md:grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto pt-2">
+                  {(displayData.imageUrls ?? []).map((pngUrl, i) => (
+                    <img
+                      key={i}
+                      src={pngUrl}
+                      loading="lazy"
+                      className={`w-full cursor-pointer border-4 rounded ${
+                        displayData.id === pngUrl
+                          ? "border-green-500"
+                          : "border-transparent hover:border-gray-300"
+                      }`}
+                      onClick={() => handleSelectArtwork(pngUrl)}
+                    />
+                  ))}
+                </div>
+              </>
             )}
 
-            <Button
-              className="w-full mt-4"
-              color="gray"
-              onClick={getMorePrints}
-              disabled={isGettingMore || isFetchingArtworks}
-            >
-              {isGettingMore ? "Loading all prints..." : "Show All Prints (every set)"}
-            </Button>
+            {!setSearchResults && (
+              <Button
+                className="w-full mt-4"
+                color="gray"
+                onClick={getMorePrints}
+                disabled={isGettingMore || isFetchingArtworks}
+              >
+                {isGettingMore ? "Loading all prints..." : "Show All Prints (every set)"}
+              </Button>
+            )}
           </>
         )}
       </ModalBody>

@@ -22,19 +22,24 @@ async function delayScryfallRequest() {
  * Core: given a CardInfo { name, set?, number?, language? }, return PNG urls.
  * If set && number => try exact printing (that language); else set+name; else name-only.
  * `unique` can be "art" or "prints".
+ * `strictSet` when true, prevents fallback to name-only search if set search fails.
  */
 async function getImagesForCardInfo(
   cardInfo,
   unique = "art",
   language = "en",
-  fallbackToEnglish = true
+  fallbackToEnglish = true,
+  strictSet = false
 ) {
   const { name, set, number } = cardInfo || {};
   const lang = (language || "en").toLowerCase();
 
+  console.log(`[getImagesForCardInfo] name="${name}", set="${set}", number="${number}", unique="${unique}", strictSet=${strictSet}`);
+
   // If we want unique arts, skip set/number entirely (a specific printing has only one art)
   // Only use set/number when unique=prints (getting all printings of a specific card)
   if (unique === "prints" && set && number) {
+    console.log(`[getImagesForCardInfo] Branch 1: set+number`);
     // 1) Exact printing: set + collector number + name
     const q = `set:${set} number:${escapeColon(
       number
@@ -46,30 +51,67 @@ async function getImagesForCardInfo(
       )} name:"${name}" include:extras unique:prints lang:en`;
       urls = await fetchPngsByQuery(qEn);
     }
-    if (urls.length) return urls;
-    // fall through to next strategy if exact failed
+    if (urls.length) {
+      console.log(`[getImagesForCardInfo] Branch 1 returned ${urls.length} results`);
+      return urls;
+    }
+    // If strictSet is enabled and we had both set+number, don't fall back
+    if (strictSet) {
+      console.log(`[getImagesForCardInfo] Branch 1 strictSet=true, returning empty`);
+      return [];
+    }
   }
 
   // 2) Set + name (all printings in set for that name)
   // Only use this if unique=prints, otherwise skip to name-only
   if (unique === "prints" && set && !number) {
+    console.log(`[getImagesForCardInfo] Branch 2: set only`);
     const q = `set:${set} name:"${name}" include:extras unique:prints lang:${lang}`;
     let urls = await fetchPngsByQuery(q);
     if (!urls.length && fallbackToEnglish && lang !== "en") {
       const qEn = `set:${set} name:"${name}" include:extras unique:prints lang:en`;
       urls = await fetchPngsByQuery(qEn);
     }
-    if (urls.length) return urls;
-    // fallback if empty
+    if (urls.length) {
+      console.log(`[getImagesForCardInfo] Branch 2 returned ${urls.length} results`);
+      return urls;
+    }
+    // If strictSet is enabled and we had a set, don't fall back to name-only
+    if (strictSet) {
+      console.log(`[getImagesForCardInfo] Branch 2 strictSet=true, returning empty`);
+      return [];
+    }
+  }
+
+  // 2b) Number only (no set) - search for this card name with that collector number across all sets
+  if (unique === "prints" && !set && number) {
+    console.log(`[getImagesForCardInfo] Branch 2b: number only`);
+    const q = `name:"${name}" number:${escapeColon(number)} include:extras unique:prints lang:${lang}`;
+    let urls = await fetchPngsByQuery(q);
+    if (!urls.length && fallbackToEnglish && lang !== "en") {
+      const qEn = `name:"${name}" number:${escapeColon(number)} include:extras unique:prints lang:en`;
+      urls = await fetchPngsByQuery(qEn);
+    }
+    if (urls.length) {
+      console.log(`[getImagesForCardInfo] Branch 2b returned ${urls.length} results`);
+      return urls;
+    }
+    // If strictSet is enabled and we had a number filter, don't fall back to name-only
+    if (strictSet) {
+      console.log(`[getImagesForCardInfo] Branch 2b strictSet=true, returning empty`);
+      return [];
+    }
   }
 
   // 3) Name-only search - this is the main strategy for unique:art
+  console.log(`[getImagesForCardInfo] Branch 3: name-only fallback`);
   const q = `!"${name}" include:extras unique:${unique} lang:${lang}`;
   let urls = await fetchPngsByQuery(q);
   if (!urls.length && fallbackToEnglish && lang !== "en") {
     const qEn = `!"${name}" include:extras unique:${unique} lang:en`;
     urls = await fetchPngsByQuery(qEn);
   }
+  console.log(`[getImagesForCardInfo] Branch 3 returned ${urls.length} results`);
   return urls;
 }
 
