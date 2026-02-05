@@ -1,15 +1,24 @@
 import { buildDecklist, downloadDecklist } from "@/helpers/DecklistHelper";
-import { useLoadingStore } from "@/store/loading";
+import { useLoadingStore, type LoadingTask } from "@/store/loading";
 import { useSettingsStore } from "@/store/settings";
 import { Button } from "flowbite-react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "../../db";
+import type { CardOption } from "@/types/Card";
 
 export function ExportActions() {
   const setLoadingTask = useLoadingStore((state) => state.setLoadingTask);
   const setProgress = useLoadingStore((state) => state.setProgress);
 
-  const cards = useLiveQuery(() => db.cards.orderBy("order").toArray(), []) || [];
+  const allCards = useLiveQuery(() => db.cards.orderBy("order").toArray(), []) || [];
+  const frontCards = useLiveQuery(
+    () => db.cards.where("face").equals("front").sortBy("order"),
+    []
+  ) || [];
+  const backCards = useLiveQuery(
+    () => db.cards.where("face").equals("back").sortBy("order"),
+    []
+  ) || [];
 
   const pageOrientation = useSettingsStore((state) => state.pageOrientation);
   const pageSizeUnit = useSettingsStore((state) => state.pageSizeUnit);
@@ -29,18 +38,50 @@ export function ExportActions() {
   const setOnCancel = useLoadingStore((state) => state.setOnCancel);
 
   const handleCopyDecklist = async () => {
-    const text = buildDecklist(cards, { style: "withSetNum", sort: "alpha" });
+    const text = buildDecklist(allCards, { style: "withSetNum", sort: "alpha" });
     await navigator.clipboard.writeText(text);
   };
 
   const handleDownloadDecklist = () => {
-    const text = buildDecklist(cards, { style: "withSetNum", sort: "alpha" });
+    const text = buildDecklist(allCards, { style: "withSetNum", sort: "alpha" });
     const date = new Date().toISOString().slice(0, 10);
     downloadDecklist(`decklist_${date}.txt`, text);
   };
 
-  const handleExport = async () => {
-    if (!cards.length) return;
+  /**
+   * Build the card array for PDF export.
+   * Front: sequential cards as-is.
+   * Back: build array with nulls for empty grid cells.
+   */
+  function buildExportCards(face: "front" | "back"): (CardOption | null)[] {
+    if (face === "front") {
+      return frontCards;
+    }
+
+    // Back face: build a sparse array based on grid positions
+    const pageCapacity = columns * rows;
+    const maxBackIndex = backCards.length > 0
+      ? Math.max(...backCards.map(c => c.order))
+      : -1;
+    const frontPageCount = Math.max(1, Math.ceil(frontCards.length / pageCapacity));
+    const backPagesNeeded = Math.ceil((maxBackIndex + 1) / pageCapacity);
+    const totalCells = Math.max(frontPageCount, backPagesNeeded) * pageCapacity;
+
+    const backByIndex = new Map<number, CardOption>();
+    for (const card of backCards) {
+      backByIndex.set(card.order, card);
+    }
+
+    const result: (CardOption | null)[] = [];
+    for (let i = 0; i < totalCells; i++) {
+      result.push(backByIndex.get(i) ?? null);
+    }
+    return result;
+  }
+
+  const runExport = async (face: "front" | "back", label: LoadingTask) => {
+    const exportCards = buildExportCards(face);
+    if (!exportCards.length) return;
 
     const { exportProxyPagesToPdf } = await import(
       "@/helpers/ExportProxyPageToPdf"
@@ -54,12 +95,12 @@ export function ExportActions() {
     const pageHeightPx =
       pageSizeUnit === "in" ? pageHeight * dpi : (pageHeight / 25.4) * dpi;
 
-    const MAX_PIXELS_PER_PDF_BATCH = 2_000_000_000; // 2 billion pixels
+    const MAX_PIXELS_PER_PDF_BATCH = 2_000_000_000;
     const pixelsPerPage = pageWidthPx * pageHeightPx;
     const autoPagesPerPdf = Math.floor(MAX_PIXELS_PER_PDF_BATCH / pixelsPerPage);
     const effectivePagesPerPdf = Math.max(1, autoPagesPerPdf);
 
-    setLoadingTask("Generating PDF");
+    setLoadingTask(label);
     setProgress(0);
 
     let rejectPromise: (reason?: Error) => void;
@@ -74,7 +115,7 @@ export function ExportActions() {
 
     try {
       await exportProxyPagesToPdf({
-        cards,
+        cards: exportCards,
         imagesById,
         bleedEdge,
         bleedEdgeWidthMm: bleedEdgeWidth,
@@ -93,6 +134,7 @@ export function ExportActions() {
         onProgress: setProgress,
         pagesPerPdf: effectivePagesPerPdf,
         cancellationPromise,
+        filenameSuffix: face,
       });
     } catch (err: unknown) {
       if (err instanceof Error && err.message !== "Cancelled by user") {
@@ -104,14 +146,21 @@ export function ExportActions() {
     }
   };
 
+  const handleExportFront = () => runExport("front", "Generating Front PDF");
+  const handleExportBack = () => runExport("back", "Generating Back PDF");
+  const handleExportBoth = async () => {
+    await runExport("front", "Generating Front PDF");
+    await runExport("back", "Generating Back PDF");
+  };
+
   async function handleExportZip() {
     setLoadingTask("Exporting ZIP");
     try {
       const { ExportImagesZip } = await import("@/helpers/ExportImagesZip");
-      const allCards = await db.cards.toArray();
+      const allCardsArr = await db.cards.toArray();
       const allImages = await db.images.toArray();
       await ExportImagesZip({
-        cards: allCards,
+        cards: allCardsArr,
         images: allImages,
       });
     } finally {
@@ -121,26 +170,40 @@ export function ExportActions() {
 
   return (
     <div className="flex flex-col gap-2">
-      <Button color="green" onClick={handleExport} disabled={!cards.length}>
-        Export to PDF
-      </Button>
+      {backCards.length > 0 ? (
+        <>
+          <Button color="green" onClick={handleExportFront} disabled={!frontCards.length}>
+            Export Front PDF
+          </Button>
+          <Button color="green" onClick={handleExportBack} disabled={!backCards.length}>
+            Export Back PDF
+          </Button>
+          <Button color="teal" onClick={handleExportBoth} disabled={!frontCards.length && !backCards.length}>
+            Export Both PDFs
+          </Button>
+        </>
+      ) : (
+        <Button color="green" onClick={handleExportFront} disabled={!frontCards.length}>
+          Export to PDF
+        </Button>
+      )}
 
       <Button
         color="indigo"
         onClick={handleExportZip}
-        disabled={!cards.length}
+        disabled={!allCards.length}
       >
         Export Card Images (.zip)
       </Button>
 
-      <Button color="cyan" onClick={handleCopyDecklist} disabled={!cards.length}>
+      <Button color="cyan" onClick={handleCopyDecklist} disabled={!allCards.length}>
         Copy Decklist
       </Button>
 
       <Button
         color="blue"
         onClick={handleDownloadDecklist}
-        disabled={!cards.length}
+        disabled={!allCards.length}
       >
         Download Decklist (.txt)
       </Button>

@@ -65,6 +65,25 @@ function extractImageUrl(card) {
 }
 
 /**
+ * Extract both front and back image URLs from a Scryfall card object.
+ * For DFCs, returns both faces. For normal cards, back is null.
+ * @param {Object} card - Scryfall card object
+ * @returns {{ front: string|null, back: string|null }}
+ */
+function extractImageUrls(card) {
+  if (card.image_uris?.png) {
+    // Normal card - no back face
+    return { front: card.image_uris.png, back: null };
+  }
+  if (Array.isArray(card.card_faces)) {
+    const front = card.card_faces[0]?.image_uris?.png || null;
+    const back = card.card_faces[1]?.image_uris?.png || null;
+    return { front, back };
+  }
+  return { front: null, back: null };
+}
+
+/**
  * Call Scryfall Collection API for a batch of identifiers.
  * @param {Array} identifiers - Array of Scryfall identifiers
  * @returns {Object} { data: [], not_found: [] }
@@ -183,13 +202,15 @@ async function fetchCardsWithFallback(cardQueries) {
         const match = matchCardToQuery(card, batch);
         if (match) {
           matched.add(match.key);
+          const urls = extractImageUrls(card);
           results.set(match.key, {
             query: match.query,
             card: {
               name: card.name,
               set: card.set,
               number: card.collector_number,
-              imageUrl: extractImageUrl(card),
+              imageUrl: urls.front,
+              backImageUrl: urls.back,
             },
           });
         }
@@ -256,5 +277,6 @@ module.exports = {
   buildIdentifier,
   cardKey,
   extractImageUrl,
+  extractImageUrls,
   BATCH_SIZE,
 };

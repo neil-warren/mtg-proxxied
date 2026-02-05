@@ -8,6 +8,7 @@ export interface CardOption {
   set?: string;
   number?: string;
   lang?: string;
+  face: "front" | "back";
 }
 
 export interface ScryfallCard {

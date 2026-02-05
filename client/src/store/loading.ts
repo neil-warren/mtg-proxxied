@@ -4,6 +4,8 @@ export type LoadingTask =
   | "Fetching cards"
   | "Processing Images"
   | "Generating PDF"
+  | "Generating Front PDF"
+  | "Generating Back PDF"
   | "Uploading Images"
   | "Clearing Images"
   | "Exporting ZIP"

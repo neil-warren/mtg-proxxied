@@ -27,7 +27,7 @@ import {
   Textarea,
   Tooltip,
 } from "flowbite-react";
-import { Copy, ExternalLink, HelpCircle, X } from "lucide-react";
+import { ExternalLink, HelpCircle } from "lucide-react";
 
 async function readText(file: File): Promise<string> {
   return new Promise((resolve) => {
@@ -39,7 +39,6 @@ async function readText(file: File): Promise<string> {
 
 export function UploadSection() {
   const [deckText, setDeckText] = useState("");
-  const [dfcBackFaces, setDfcBackFaces] = useState<string[]>([]);
   const fetchController = useRef<AbortController | null>(null);
 
   const setLoadingTask = useLoadingStore((state) => state.setLoadingTask);
@@ -56,7 +55,7 @@ export function UploadSection() {
     const fileArray = Array.from(files);
 
     const cardsToAdd: Array<
-      Omit<CardOption, "uuid" | "order"> & { imageId: string }
+      Omit<CardOption, "uuid" | "order" | "face"> & { imageId: string; face?: "front" | "back" }
     > = [];
 
     for (const file of fileArray) {
@@ -117,7 +116,7 @@ export function UploadSection() {
         schemaItems && schemaItems.length ? schemaItems : parseMpcText(raw);
 
       const cardsToAdd: Array<
-        Omit<CardOption, "uuid" | "order"> & { imageId?: string }
+        Omit<CardOption, "uuid" | "order" | "face"> & { imageId?: string; face?: "front" | "back" }
       > = [];
 
       for (const it of items) {
@@ -163,11 +162,6 @@ export function UploadSection() {
       const nonDfcEntries = rawInfos.filter((e) => !e.info.backFaceName);
       const infos = [...dfcEntries, ...nonDfcEntries];
 
-      // Collect back face names with quantities for the sidebar section
-      const backFaces = dfcEntries.flatMap((e) =>
-        Array.from({ length: e.quantity }, () => e.info.backFaceName!)
-      );
-
       setLoadingTask("Fetching cards");
 
       // Deduplicate queries while preserving quantity info
@@ -182,6 +176,7 @@ export function UploadSection() {
           set?: string;
           number?: string;
           imageUrl: string | null;
+          backImageUrl?: string | null;
           found: boolean;
         }>;
         notFound: Array<{ name: string; set?: string; number?: string }>;
@@ -217,10 +212,20 @@ export function UploadSection() {
         }
       }
 
-      // Build cards to add, respecting quantities from original decklist
-      const cardsToAdd: (Omit<CardOption, "uuid" | "order"> & {
+      // Build front cards to add, respecting quantities from original decklist
+      const frontCardsToAdd: (Omit<CardOption, "uuid" | "order" | "face"> & {
         imageId?: string;
+        face?: "front" | "back";
       })[] = [];
+
+      // Track DFC back faces to add after front cards (so we know the grid positions)
+      const backFaceEntries: Array<{
+        backImageUrl: string;
+        name: string;
+        set?: string;
+        number?: string;
+        quantity: number;
+      }> = [];
 
       for (const { info, quantity } of infos) {
         const k = cardKey(info);
@@ -231,18 +236,79 @@ export function UploadSection() {
         const imageId = imageUrl ? await addRemoteImage([imageUrl], quantity) : undefined;
 
         for (let i = 0; i < quantity; i++) {
-          cardsToAdd.push({
+          frontCardsToAdd.push({
             name: result?.name || info.name,
             set: result?.set,
             number: result?.number,
             isUserUpload: false,
             imageId: imageId,
+            face: "front",
+          });
+        }
+
+        // Collect DFC back face info
+        if (result?.backImageUrl) {
+          backFaceEntries.push({
+            backImageUrl: result.backImageUrl,
+            name: result.name,
+            set: result.set,
+            number: result.number,
+            quantity,
           });
         }
       }
 
-      if (cardsToAdd.length > 0) {
-        await addCards(cardsToAdd);
+      if (frontCardsToAdd.length > 0) {
+        await addCards(frontCardsToAdd);
+      }
+
+      // Create back-face cards for DFCs, positioned to match front card grid positions
+      if (backFaceEntries.length > 0) {
+        // Get all front cards (ordered) to determine the sequential position of newly added cards
+        const allFrontCards = await db.cards.where("face").equals("front").sortBy("order");
+        // The newly added front cards start at this index
+        const newFrontStartIdx = allFrontCards.length - frontCardsToAdd.length;
+
+        // Walk through infos in the same order as front cards were added
+        // to determine which sequential grid position each DFC front occupies
+        let frontOffset = 0;
+        for (const { info, quantity } of infos) {
+          const k = cardKey(info);
+          const fallbackK = cardKey({ name: info.name });
+          const result = resultByKey[k] ?? resultByKey[fallbackK];
+
+          if (result?.backImageUrl) {
+            const backImageId = await addRemoteImage([result.backImageUrl], quantity);
+            const dfcSplit = result.name?.indexOf(" // ") ?? -1;
+            const backName = dfcSplit !== -1 ? result.name.slice(dfcSplit + 4).trim() : result.name;
+
+            for (let i = 0; i < quantity; i++) {
+              // This DFC front card is at sequential position (newFrontStartIdx + frontOffset)
+              // Place the back card at the same grid cell index
+              const gridPosition = newFrontStartIdx + frontOffset;
+
+              const backCard = {
+                name: backName,
+                set: result.set,
+                number: result.number,
+                isUserUpload: false,
+                imageId: backImageId,
+                face: "back" as const,
+              };
+
+              // Add back card then immediately set its order to the absolute grid position
+              await addCards([backCard]);
+              const lastBack = await db.cards.where("face").equals("back").reverse().sortBy("order");
+              if (lastBack.length > 0) {
+                await db.cards.update(lastBack[0].uuid, { order: gridPosition });
+              }
+
+              frontOffset++;
+            }
+          } else {
+            frontOffset += quantity;
+          }
+        }
       }
 
       // Warn user about cards that couldn't be found
@@ -254,7 +320,6 @@ export function UploadSection() {
         );
       }
 
-      setDfcBackFaces(backFaces);
       setDeckText("");
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -435,55 +500,6 @@ export function UploadSection() {
               Clear Cards
             </Button>
           </div>
-
-          {dfcBackFaces.length > 0 && (
-            <div className="rounded-md border border-gray-300 dark:border-gray-500 bg-gray-200 dark:bg-gray-600 p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <h6 className="font-medium text-sm dark:text-white">
-                  Back Faces
-                </h6>
-                <div className="flex gap-1">
-                  <button
-                    className="p-1 rounded hover:bg-gray-300 dark:hover:bg-gray-500"
-                    title="Copy back faces"
-                    onClick={async () => {
-                      // Deduplicate with quantities
-                      const counts = new Map<string, number>();
-                      for (const name of dfcBackFaces) {
-                        counts.set(name, (counts.get(name) ?? 0) + 1);
-                      }
-                      const text = Array.from(counts.entries())
-                        .map(([name, qty]) => `${qty}x ${name}`)
-                        .join("\n");
-                      await navigator.clipboard.writeText(text);
-                    }}
-                  >
-                    <Copy className="w-4 h-4 dark:text-white" />
-                  </button>
-                  <button
-                    className="p-1 rounded hover:bg-gray-300 dark:hover:bg-gray-500"
-                    title="Dismiss"
-                    onClick={() => setDfcBackFaces([])}
-                  >
-                    <X className="w-4 h-4 dark:text-white" />
-                  </button>
-                </div>
-              </div>
-              <ul className="text-xs dark:text-white/70 space-y-0.5">
-                {(() => {
-                  const counts = new Map<string, number>();
-                  for (const name of dfcBackFaces) {
-                    counts.set(name, (counts.get(name) ?? 0) + 1);
-                  }
-                  return Array.from(counts.entries()).map(([name, qty]) => (
-                    <li key={name}>
-                      {qty}x {name}
-                    </li>
-                  ));
-                })()}
-              </ul>
-            </div>
-          )}
 
           <div className="space-y-1">
             <div className="flex items-center justify-between">

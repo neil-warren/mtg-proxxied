@@ -47,9 +47,21 @@ export class ProxxiedDexie extends Dexie {
   constructor() {
     super('ProxxiedDB');
     this.version(1).stores({
-      cards: '&uuid, imageId, order, name', // uuid is unique primary key, name, set, number are indexed
-      images: '&id, refCount, displayDpi, displayBleedWidth, exportDpi, exportBleedWidth', // uuid is unique primary key
+      cards: '&uuid, imageId, order, name',
+      images: '&id, refCount, displayDpi, displayBleedWidth, exportDpi, exportBleedWidth',
       settings: '&id',
+    });
+
+    this.version(2).stores({
+      cards: '&uuid, imageId, order, name, face',
+      images: '&id, refCount, displayDpi, displayBleedWidth, exportDpi, exportBleedWidth',
+      settings: '&id',
+    }).upgrade(tx => {
+      return tx.table('cards').toCollection().modify(card => {
+        if (!card.face) {
+          card.face = 'front';
+        }
+      });
     });
   }
 }

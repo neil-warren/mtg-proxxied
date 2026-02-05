@@ -120,13 +120,14 @@ export async function removeImageRef(imageId: string): Promise<void> {
  */
 export async function addCards(
   cardsData: Array<
-    Omit<CardOption, "uuid" | "order"> & { imageId?: string }
+    Omit<CardOption, "uuid" | "order" | "face"> & { imageId?: string; face?: "front" | "back" }
   >
 ): Promise<void> {
   const maxOrder = (await db.cards.orderBy("order").last())?.order ?? 0;
 
   const newCards: CardOption[] = cardsData.map((cardData, i) => ({
     ...cardData,
+    face: cardData.face ?? "front",
     uuid: crypto.randomUUID(),
     order: maxOrder + (i + 1) * 10,
   }));

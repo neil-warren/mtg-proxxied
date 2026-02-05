@@ -273,6 +273,7 @@ imageRouter.post("/collection", async (req, res) => {
           set: match.card.set,
           number: match.card.number,
           imageUrl: match.card.imageUrl,
+          backImageUrl: match.card.backImageUrl || null,
           found: true,
         };
       } else {

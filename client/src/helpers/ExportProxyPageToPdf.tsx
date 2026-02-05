@@ -3,9 +3,9 @@ import type { CardOption } from "@/types/Card";
 import { PDFDocument } from "pdf-lib";
 
 function* pageGenerator(
-  cards: CardOption[],
+  cards: (CardOption | null)[],
   perPage: number
-): Generator<CardOption[], void, void> {
+): Generator<(CardOption | null)[], void, void> {
   for (let i = 0; i < cards.length; i += perPage) {
     yield cards.slice(i, i + perPage);
   }
@@ -30,8 +30,9 @@ export async function exportProxyPagesToPdf({
   onProgress,
   pagesPerPdf,
   cancellationPromise,
+  filenameSuffix,
 }: {
-  cards: CardOption[];
+  cards: (CardOption | null)[];
   imagesById: Map<string, import("../db").Image>;
   bleedEdge: boolean;
   bleedEdgeWidthMm: number;
@@ -50,13 +51,14 @@ export async function exportProxyPagesToPdf({
   onProgress?: (progress: number) => void;
   pagesPerPdf: number;
   cancellationPromise: Promise<void>;
+  filenameSuffix?: string;
 }): Promise<void> {
   if (!cards || !cards.length) {
     return;
   }
 
   const perPage = Math.max(1, columns * rows);
-  const totalImages = cards.length;
+  const totalImages = cards.filter(c => c !== null).length;
   let totalImagesProcessed = 0;
   const pdfBuffers: Uint8Array[] = [];
 
@@ -64,7 +66,7 @@ export async function exportProxyPagesToPdf({
 
   let isDone = false;
   while (!isDone) {
-    const chunkPages: CardOption[][] = [];
+    const chunkPages: (CardOption | null)[][] = [];
     if (pagesPerPdf > 0) {
       for (let i = 0; i < pagesPerPdf; i++) {
         const nextPage = pagesIterator.next();
@@ -281,7 +283,8 @@ export async function exportProxyPagesToPdf({
 
   const mergedPdfFile = await mergedPdf.save();
   const date = new Date().toISOString().slice(0, 10);
-  const filename = `proxxies_${date}.pdf`;
+  const suffix = filenameSuffix ? `_${filenameSuffix}` : "";
+  const filename = `proxxies${suffix}_${date}.pdf`;
 
   const blob = new Blob([mergedPdfFile], { type: "application/pdf" });
   const link = document.createElement("a");

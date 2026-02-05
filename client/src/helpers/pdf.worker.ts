@@ -320,7 +320,12 @@ self.onmessage = async (event: MessageEvent) => {
             const row = Math.floor(idx / columns);
             const x = startX + col * (cardWidthPx + spacingPx);
             const y = startY + row * (cardHeightPx + spacingPx);
-    
+
+            // Skip null entries (empty grid cells in back-face export)
+            if (!card) {
+                continue;
+            }
+
             let finalCardCanvas: OffscreenCanvas | ImageBitmap;
             const imageInfo = card.imageId ? imagesById.get(card.imageId) : undefined;
 
