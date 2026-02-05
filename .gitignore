@@ -1,4 +1,8 @@
 server/src/cached-images/*
 server/src/uploaded-images/*
+server/dist/
 
 node_modules
+
+.DS_Store
+firebase-debug.log
