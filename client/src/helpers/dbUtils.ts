@@ -52,7 +52,8 @@ export async function addCustomImage(blob: Blob): Promise<string> {
  * @returns The ID (URL) of the image in the database.
  */
 export async function addRemoteImage(
-  imageUrls: string[]
+  imageUrls: string[],
+  count: number = 1
 ): Promise<string | undefined> {
   if (!imageUrls || imageUrls.length === 0) return undefined;
 
@@ -63,14 +64,14 @@ export async function addRemoteImage(
 
     if (existingImage) {
       await db.images.update(imageId, {
-        refCount: existingImage.refCount + 1,
+        refCount: existingImage.refCount + count,
       });
     } else {
       await db.images.add({
         id: imageId,
         sourceUrl: imageUrls[0],
         imageUrls: imageUrls,
-        refCount: 1,
+        refCount: count,
       });
     }
   });
@@ -142,9 +143,9 @@ export async function addCards(
 export async function deleteCard(uuid: string): Promise<void> {
   await db.transaction("rw", db.cards, db.images, async () => {
     const card = await db.cards.get(uuid);
-    if (card?.imageId) {
-      await db.cards.delete(uuid);
-      // Safely call the non-transactional helper from within the transaction.
+    if (!card) return;
+    await db.cards.delete(uuid);
+    if (card.imageId) {
       await _removeImageRef_transactional(card.imageId);
     }
   });

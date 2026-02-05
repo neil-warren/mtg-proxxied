@@ -45,7 +45,10 @@ export function useImageProcessing({
 
     const p = (async () => {
       const src = await getOriginalSrcForCard(card);
-      if (!src) return;
+      if (!src) {
+        setLoadingMap((m) => ({ ...m, [card.uuid]: "error" }));
+        return;
+      }
 
       setLoadingMap((m) => ({ ...m, [card.uuid]: "loading" }));
       try {

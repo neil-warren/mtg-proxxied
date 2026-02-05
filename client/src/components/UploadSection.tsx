@@ -228,7 +228,7 @@ export function UploadSection() {
         const result = resultByKey[k] ?? resultByKey[fallbackK];
 
         const imageUrl = result?.imageUrl;
-        const imageId = imageUrl ? await addRemoteImage([imageUrl]) : undefined;
+        const imageId = imageUrl ? await addRemoteImage([imageUrl], quantity) : undefined;
 
         for (let i = 0; i < quantity; i++) {
           cardsToAdd.push({

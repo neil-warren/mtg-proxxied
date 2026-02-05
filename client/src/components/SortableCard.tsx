@@ -54,21 +54,21 @@ export default function SortableCard({
       onClick={() => {
         openArtworkModal({ card, index: globalIndex });
       }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setContextMenu({
+          visible: true,
+          x: e.clientX,
+          y: e.clientY,
+          cardUuid: card.uuid,
+        });
+      }}
     >
       <img
         src={imageSrc}
         draggable={false}
         onDragStart={(e) => e.preventDefault()}
         className="cursor-pointer block"
-        onContextMenu={(e) => {
-          e.preventDefault();
-          setContextMenu({
-            visible: true,
-            x: e.clientX,
-            y: e.clientY,
-            cardUuid: card.uuid,
-          });
-        }}
       />
 
       {/* ⠿ Drag Handle */}

@@ -30,7 +30,7 @@ export default function CardCellLazy({
     <div ref={ref} className="relative">
       {/* Only show spinner if we have no image at all */}
       {!hasImage && state !== "error" && (
-        <div className="absolute inset-0 grid place-items-center z-10">
+        <div className="absolute inset-0 grid place-items-center z-10 pointer-events-none">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-300 border-t-transparent" />
         </div>
       )}
@@ -41,19 +41,16 @@ export default function CardCellLazy({
         </div>
       )}
       {state === "error" && !hasImage && (
-        <div className="absolute inset-0 grid place-items-center z-10">
-          <div className="px-2 py-1 text-xs bg-red-600 text-white rounded">
+        <div className="absolute inset-0 grid place-items-center z-10 pointer-events-none">
+          <div
+            className="px-2 py-1 text-xs bg-red-600 text-white rounded cursor-pointer pointer-events-auto"
+            onClick={() => void ensureProcessed(card)}
+          >
             load failed — click to retry
           </div>
         </div>
       )}
-      <div
-        onClick={() => {
-          if (state === "error") void ensureProcessed(card);
-        }}
-      >
-        {children}
-      </div>
+      {children}
     </div>
   );
 }
