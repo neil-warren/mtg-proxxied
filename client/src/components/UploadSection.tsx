@@ -27,7 +27,7 @@ import {
   Textarea,
   Tooltip,
 } from "flowbite-react";
-import { ExternalLink, HelpCircle } from "lucide-react";
+import { Copy, ExternalLink, HelpCircle, X } from "lucide-react";
 
 async function readText(file: File): Promise<string> {
   return new Promise((resolve) => {
@@ -39,6 +39,7 @@ async function readText(file: File): Promise<string> {
 
 export function UploadSection() {
   const [deckText, setDeckText] = useState("");
+  const [dfcBackFaces, setDfcBackFaces] = useState<string[]>([]);
   const fetchController = useRef<AbortController | null>(null);
 
   const setLoadingTask = useLoadingStore((state) => state.setLoadingTask);
@@ -154,8 +155,18 @@ export function UploadSection() {
     fetchController.current = new AbortController();
 
     try {
-      const infos = parseDeckToInfos(deckText || "");
-      if (!infos.length) return;
+      const rawInfos = parseDeckToInfos(deckText || "");
+      if (!rawInfos.length) return;
+
+      // Partition: DFCs first, then non-DFCs
+      const dfcEntries = rawInfos.filter((e) => e.info.backFaceName);
+      const nonDfcEntries = rawInfos.filter((e) => !e.info.backFaceName);
+      const infos = [...dfcEntries, ...nonDfcEntries];
+
+      // Collect back face names with quantities for the sidebar section
+      const backFaces = dfcEntries.flatMap((e) =>
+        Array.from({ length: e.quantity }, () => e.info.backFaceName!)
+      );
 
       setLoadingTask("Fetching cards");
 
@@ -194,6 +205,16 @@ export function UploadSection() {
         // Also store by name-only for fallback matching
         const nameOnlyKey = cardKey({ name: result.name });
         if (!resultByKey[nameOnlyKey]) resultByKey[nameOnlyKey] = result;
+
+        // DFC: also key by front face name so stripped queries can match
+        const dfcSplit = result.name.indexOf(" // ");
+        if (dfcSplit !== -1) {
+          const frontName = result.name.slice(0, dfcSplit).trim();
+          const frontKey = cardKey({ name: frontName, set: result.set, number: result.number });
+          if (!resultByKey[frontKey]) resultByKey[frontKey] = result;
+          const frontNameOnly = cardKey({ name: frontName });
+          if (!resultByKey[frontNameOnly]) resultByKey[frontNameOnly] = result;
+        }
       }
 
       // Build cards to add, respecting quantities from original decklist
@@ -233,6 +254,7 @@ export function UploadSection() {
         );
       }
 
+      setDfcBackFaces(backFaces);
       setDeckText("");
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -413,6 +435,55 @@ export function UploadSection() {
               Clear Cards
             </Button>
           </div>
+
+          {dfcBackFaces.length > 0 && (
+            <div className="rounded-md border border-gray-300 dark:border-gray-500 bg-gray-200 dark:bg-gray-600 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <h6 className="font-medium text-sm dark:text-white">
+                  Back Faces
+                </h6>
+                <div className="flex gap-1">
+                  <button
+                    className="p-1 rounded hover:bg-gray-300 dark:hover:bg-gray-500"
+                    title="Copy back faces"
+                    onClick={async () => {
+                      // Deduplicate with quantities
+                      const counts = new Map<string, number>();
+                      for (const name of dfcBackFaces) {
+                        counts.set(name, (counts.get(name) ?? 0) + 1);
+                      }
+                      const text = Array.from(counts.entries())
+                        .map(([name, qty]) => `${qty}x ${name}`)
+                        .join("\n");
+                      await navigator.clipboard.writeText(text);
+                    }}
+                  >
+                    <Copy className="w-4 h-4 dark:text-white" />
+                  </button>
+                  <button
+                    className="p-1 rounded hover:bg-gray-300 dark:hover:bg-gray-500"
+                    title="Dismiss"
+                    onClick={() => setDfcBackFaces([])}
+                  >
+                    <X className="w-4 h-4 dark:text-white" />
+                  </button>
+                </div>
+              </div>
+              <ul className="text-xs dark:text-white/70 space-y-0.5">
+                {(() => {
+                  const counts = new Map<string, number>();
+                  for (const name of dfcBackFaces) {
+                    counts.set(name, (counts.get(name) ?? 0) + 1);
+                  }
+                  return Array.from(counts.entries()).map(([name, qty]) => (
+                    <li key={name}>
+                      {qty}x {name}
+                    </li>
+                  ));
+                })()}
+              </ul>
+            </div>
+          )}
 
           <div className="space-y-1">
             <div className="flex items-center justify-between">

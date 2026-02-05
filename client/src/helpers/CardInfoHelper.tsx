@@ -2,6 +2,7 @@ export type CardInfo = {
   name: string;
   set?: string;
   number?: string;
+  backFaceName?: string;
 };
 
 export type CardInfoWithQuantity = {
@@ -34,7 +35,15 @@ export function extractCardInfo(input: string): CardInfo {
     s = s.replace(setNumTail, "").trim();
   }
 
-  return { name: s, set: setCode, number };
+  // Handle double-faced cards: "Front Face // Back Face"
+  let backFaceName: string | undefined;
+  const dfcSplit = s.indexOf(" // ");
+  if (dfcSplit !== -1) {
+    backFaceName = s.slice(dfcSplit + 4).trim();
+    s = s.slice(0, dfcSplit).trim();
+  }
+
+  return { name: s, set: setCode, number, backFaceName };
 }
 
 export function parseDeckToInfos(deckText: string): CardInfoWithQuantity[] {

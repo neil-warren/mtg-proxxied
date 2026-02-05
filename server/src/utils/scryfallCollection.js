@@ -89,6 +89,21 @@ async function callCollectionAPI(identifiers) {
 }
 
 /**
+ * Check if a query name matches a Scryfall card name.
+ * Handles DFCs where Scryfall returns "Front // Back" but query may be just "Front".
+ */
+function namesMatch(queryName, cardName) {
+  if (!queryName || !cardName) return false;
+  const qLower = queryName.toLowerCase();
+  const cLower = cardName.toLowerCase();
+  if (qLower === cLower) return true;
+  // DFC: check if query matches front face of card name
+  const dfcSplit = cLower.indexOf(" // ");
+  if (dfcSplit !== -1 && qLower === cLower.slice(0, dfcSplit)) return true;
+  return false;
+}
+
+/**
  * Match a Scryfall card back to the original query.
  * Cards are returned in arbitrary order, so we need to match them.
  * @param {Object} card - Scryfall card object
@@ -107,7 +122,7 @@ function matchCardToQuery(card, pendingQueries) {
   // Try to match by name + set
   const byNameSet = pendingQueries.find(
     (p) =>
-      p.identifier.name?.toLowerCase() === card.name.toLowerCase() &&
+      namesMatch(p.identifier.name, card.name) &&
       p.identifier.set === card.set &&
       !p.identifier.collector_number
   );
@@ -116,7 +131,7 @@ function matchCardToQuery(card, pendingQueries) {
   // Try to match by name only
   const byName = pendingQueries.find(
     (p) =>
-      p.identifier.name?.toLowerCase() === card.name.toLowerCase() &&
+      namesMatch(p.identifier.name, card.name) &&
       !p.identifier.set
   );
   if (byName) return byName;
