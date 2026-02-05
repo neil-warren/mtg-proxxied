@@ -172,13 +172,13 @@ export function ArtworkModal() {
   }
 
   async function handleSelectArtwork(newImageUrl: string) {
-    if (!modalCard?.imageId) return;
+    if (!modalCard) return;
 
     const isReplacing = !!previewCardData;
     const newImageId = newImageUrl.includes("scryfall") ? newImageUrl.split("?")[0] : newImageUrl.split("id=")[1];
 
     await changeCardArtwork(
-      modalCard.imageId,
+      modalCard.imageId || "",
       newImageId,
       modalCard,
       applyToAll,
